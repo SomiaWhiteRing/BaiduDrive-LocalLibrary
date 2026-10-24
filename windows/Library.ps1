@@ -174,13 +174,13 @@ function Assert-LocalProfile {
     $folder=$folders[0].Substring(0,$folders[0].Length-9)
     if ($accounts[$folders[0]].Replace('\\','\').TrimEnd('\') -ne $Library.TrimEnd('\') -or $accounts[$folder+'targetPath'].TrimEnd('/') -cne $RemotePath -or $accounts[$folder+'virtualFilesMode'] -ne 'wincfapi') { throw '文件库路径或虚拟文件模式不符合配置。' }
 }
-function Assert-LocalAccess {
+function Assert-LocalAccess([int]$TimeoutSec=20) {
     $credential = Import-Clixml -LiteralPath $CredentialFile
     if ($credential.UserName -cne $Settings.NEXTCLOUD_USER) { throw '保存的本地凭据不属于配置中的账号。' }
     $encoded=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($credential.UserName+':'+$credential.GetNetworkCredential().Password))
     $path=(@($RemotePath.Trim('/').Split('/') | ForEach-Object { [uri]::EscapeDataString($_) }) -join '/')
     $uri=$BaseUrl+'/remote.php/dav/files/'+[uri]::EscapeDataString($credential.UserName)+'/'+$path
-    $response=Invoke-WebRequest $uri -CustomMethod PROPFIND -Headers @{Authorization='Basic '+$encoded;Depth='0'} -Body '<d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/></d:prop></d:propfind>' -TimeoutSec 20 -SkipHttpErrorCheck
+    $response=Invoke-WebRequest $uri -CustomMethod PROPFIND -Headers @{Authorization='Basic '+$encoded;Depth='0'} -Body '<d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/></d:prop></d:propfind>' -TimeoutSec $TimeoutSec -SkipHttpErrorCheck
     if ([int]$response.StatusCode -ne 207) { throw ('本地文件库验证失败。HTTP 状态码：'+[int]$response.StatusCode) }
 }
 function Retire-EmptyDefaultClient {
@@ -325,10 +325,12 @@ function Get-Status {
     $server=$false
     $profileReady=$false
     $metadataReady=$false
+    $fileAccessible=$false
     try{$health=Invoke-RestMethod ('http://127.0.0.1:'+$Settings.CODEC_PORT+'/health') -TimeoutSec 3;$metadataReady=($health.service -eq 'empty-codec' -and ($Settings.SHARED_METADATA -eq '0' -or $health.shared_metadata.ready))}catch{}
     try { $status=Invoke-RestMethod ($BaseUrl+'/status.php') -TimeoutSec 3; $server=$status.installed -and -not $status.maintenance } catch {}
     try { Assert-LocalProfile; $profileReady=$true } catch {}
-    [ordered]@{project=$Project;initialized=(Test-Path -LiteralPath $Marker);server_running=[bool]$server;client_running=(@(Get-ManagedClients).Count -gt 0);profile_ready=$profileReady;metadata_ready=[bool]$metadataReady;server_url=$BaseUrl;library=$Library;data_root=$DataRoot;startup_enabled=($null -ne (Get-ItemProperty -LiteralPath $RunKey -Name $RunName -ErrorAction SilentlyContinue));ready=($server -and $profileReady -and $metadataReady -and (@(Get-ManagedClients).Count -gt 0));openlist_url=('http://127.0.0.1:'+$Settings.OPENLIST_PORT);log_directory=(Join-Path $DataRoot 'logs');startup_log=(Join-Path $DataRoot 'logs\startup.log')}
+    if($server -and $profileReady){try{Assert-LocalAccess -TimeoutSec 3;$fileAccessible=$true}catch{}}
+    [ordered]@{project=$Project;initialized=(Test-Path -LiteralPath $Marker);server_running=[bool]$server;client_running=(@(Get-ManagedClients).Count -gt 0);profile_ready=$profileReady;metadata_ready=[bool]$metadataReady;file_accessible=$fileAccessible;server_url=$BaseUrl;library=$Library;data_root=$DataRoot;startup_enabled=($null -ne (Get-ItemProperty -LiteralPath $RunKey -Name $RunName -ErrorAction SilentlyContinue));ready=($server -and $profileReady -and $metadataReady -and $fileAccessible -and (@(Get-ManagedClients).Count -gt 0));openlist_url=('http://127.0.0.1:'+$Settings.OPENLIST_PORT);log_directory=(Join-Path $DataRoot 'logs');startup_log=(Join-Path $DataRoot 'logs\startup.log')}
 }
 try {
     switch ($Action) {

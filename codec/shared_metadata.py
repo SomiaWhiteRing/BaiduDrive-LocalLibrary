@@ -22,6 +22,10 @@ class MetadataError(Exception):
     pass
 
 
+class MetadataBusy(MetadataError):
+    """A specific path awaits a metadata mutation; the storage remains online."""
+
+
 class SharedMetadata:
     directory = '.baidulibrary'
     limit = 256 * 1024 * 1024
@@ -340,8 +344,15 @@ class SharedMetadata:
         for event in self.pending.values():
             if own_retry and event['device'] == self.device:
                 continue
-            if any(self.overlaps(p, old) for p in relatives for old in event['paths']):
-                raise MetadataError('Another metadata write needs completion or recovery.')
+            if own_retry:
+                blocked = any(self.overlaps(p, old) for p in relatives for old in event['paths'])
+            else:
+                # Reading an ancestor's own metadata must keep working while a
+                # descendant is written. Listings check their returned entries.
+                blocked = any(p == old or p.startswith(old + '/') or old == ''
+                              for p in relatives for old in event['paths'])
+            if blocked:
+                raise MetadataBusy('A metadata write on this path needs completion or recovery.')
 
     def begin(self, auth, paths):
         if not self.enabled:

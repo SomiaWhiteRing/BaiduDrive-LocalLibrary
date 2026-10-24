@@ -176,7 +176,11 @@ internal sealed class DriveForm : Form
                 drive = Convert.ToString(state["library"]);
                 bool mounted = Convert.ToBoolean(state["ready"]);
                 bool authorized = Convert.ToBoolean(state["profile_ready"]);
-                status.Text = mounted ? "百度网盘文件库已就绪" : (authorized ? "同步服务尚未启动" : "请先录入百度授权");
+                bool filesAvailable = state.ContainsKey("file_accessible") && Convert.ToBoolean(state["file_accessible"]);
+                bool serverRunning = Convert.ToBoolean(state["server_running"]);
+                status.Text = mounted ? "百度网盘文件库已就绪" :
+                    (authorized && serverRunning && !filesAvailable ? "文件库接口暂时不可用" :
+                    (authorized ? "同步服务尚未启动" : "请先录入百度授权"));
                 pending.Text = "文件库：" + drive;
                 updating = true;
                 startup.Checked = Convert.ToBoolean(state["startup_enabled"]);

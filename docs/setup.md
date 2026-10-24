@@ -103,7 +103,7 @@ pwsh -File .\windows\Library.ps1 -Action Start
 pwsh -File .\windows\Library.ps1 -Action Status
 ```
 
-预期结果：`server_running`、`client_running`、`profile_ready` 和 `ready` 均为 `true`。
+预期结果：`server_running`、`client_running`、`profile_ready`、`file_accessible` 和 `ready` 均为 `true`。
 
 1. 在第一台设备创建一个空文件和一个普通文件。
 2. 等待客户端完成同步。

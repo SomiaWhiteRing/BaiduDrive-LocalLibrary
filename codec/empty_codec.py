@@ -24,7 +24,7 @@ import xml.etree.ElementTree as ET
 
 import httpx
 from pcs_download import PcsDownloads
-from shared_metadata import SharedMetadata, MetadataError
+from shared_metadata import SharedMetadata, MetadataError, MetadataBusy
 
 DAV = '{DAV:}'
 MAGIC = b'BaiduDrive empty-file v1\n'
@@ -477,6 +477,8 @@ class Handler(BaseHTTPRequestHandler):
                     changed = True
         paths = [canonical(href.text) for response in root.findall(DAV + 'response')
                  if (href := response.find(DAV + 'href')) is not None and href.text]
+        if self.server.shared.enabled:
+            self.server.shared.check(paths)
         generation, metadata = self.server.catalog.listing_metadata(scope, paths)
         for response in root.findall(DAV + 'response'):
             href = response.find(DAV + 'href')
@@ -784,6 +786,9 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, ET.ParseError):
             self.close_connection = True
             self.reply(400, b'Invalid WebDAV request.\n', {'Connection': 'close'})
+        except MetadataBusy as e:
+            self.close_connection = True
+            self.reply(423, (str(e) + '\n').encode(), {'Connection': 'close'})
         except MetadataError as e:
             self.close_connection = True
             self.reply(503, (str(e) + '\n').encode(), {'Connection': 'close'})
