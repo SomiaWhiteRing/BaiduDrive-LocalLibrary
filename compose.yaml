@@ -1,0 +1,189 @@
+name: ${COMPOSE_PROJECT_NAME:-baidudrive-local}
+services:
+  openlist:
+    image: openlistteam/openlist@sha256:c555c6e1c8af2aead38ed12ec761ac077fdf046d19cf033414be8e056aec6b64
+    pull_policy: never
+    user: "0:0"
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${OPENLIST_PORT:-5244}:5244"
+    volumes:
+      - ${DATA_DIR:?Set DATA_DIR in .env}/openlist:/opt/openlist/data
+    environment:
+      TZ: ${TZ:-UTC}
+      UMASK: "077"
+    mem_limit: 2g
+    memswap_limit: 4g
+    cpus: 2.0
+    logging:
+      driver: json-file
+      options: {max-size: "5m", max-file: "3"}
+  empty-codec:
+    build: ./codec
+    image: ${COMPOSE_PROJECT_NAME:-baidudrive-local}-codec:0.1.0
+    pull_policy: never
+    restart: unless-stopped
+    networks: [default, nextcloud-internal]
+    stop_signal: SIGINT
+    depends_on:
+      openlist: {condition: service_started}
+    ports:
+      - "127.0.0.1:${CODEC_PORT:-5246}:8080"
+    volumes:
+      - ${DATA_DIR:?Set DATA_DIR in .env}/empty-codec:/state
+    environment:
+      UPSTREAM: http://openlist:5244
+      WEBDAV_USER: ${OPENLIST_USER:-library-storage}
+      STATE_DIR: /state
+      TZ: ${TZ:-UTC}
+    read_only: true
+    tmpfs: [/tmp:size=32m]
+    mem_limit: 192m
+    cpus: 0.5
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health',timeout=3).read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options: {max-size: "5m", max-file: "3"}
+  database:
+    image: mariadb@sha256:1292844148b311e4ed4300022a996d39083f415a963e970cf47cad1b3b18e3a6
+    pull_policy: never
+    restart: unless-stopped
+    networks: [nextcloud-internal]
+    stop_grace_period: 60s
+    command: ["--transaction-isolation=READ-COMMITTED", "--binlog-format=ROW", "--innodb-buffer-pool-size=128M", "--max-connections=30"]
+    volumes:
+      - ${DATA_DIR:?Set DATA_DIR in .env}/database:/var/lib/mysql
+    environment:
+      MARIADB_DATABASE: nextcloud
+      MARIADB_USER: nextcloud
+      MARIADB_PASSWORD_FILE: /run/secrets/database_password
+      MARIADB_ROOT_PASSWORD_FILE: /run/secrets/database_root_password
+      TZ: ${TZ:-UTC}
+    secrets: [database_password, database_root_password]
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 90s
+    mem_limit: 512m
+    cpus: 0.5
+    logging:
+      driver: json-file
+      options: {max-size: "5m", max-file: "3"}
+  redis:
+    image: redis@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+    pull_policy: never
+    restart: unless-stopped
+    networks: [nextcloud-internal]
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "64mb", "--maxmemory-policy", "noeviction"]
+    mem_limit: 128m
+    cpus: 0.25
+    logging:
+      driver: json-file
+      options: {max-size: "5m", max-file: "3"}
+  nextcloud:
+    image: nextcloud@sha256:0e5688ba0988b9112cf03f9c6bab53eccb466d278435f6596f16c1f25acacf74
+    pull_policy: never
+    restart: unless-stopped
+    networks: [nextcloud-internal]
+    depends_on:
+      database: {condition: service_healthy}
+      redis: {condition: service_started}
+      openlist: {condition: service_started}
+      empty-codec: {condition: service_healthy}
+    volumes:
+      - nextcloud-code:/var/www/html
+      - ${DATA_DIR:?Set DATA_DIR in .env}/nextcloud/config:/var/www/html/config
+      - ${DATA_DIR:?Set DATA_DIR in .env}/nextcloud/data:/var/www/html/data
+      - ${DATA_DIR:?Set DATA_DIR in .env}/nextcloud/custom_apps:/var/www/html/custom_apps
+      - ./config/mpm_prefork.conf:/etc/apache2/mods-available/mpm_prefork.conf:ro
+      - ./config/php-local.ini:/usr/local/etc/php/conf.d/zz-baidudrive.ini:ro
+    environment:
+      MYSQL_HOST: database
+      MYSQL_DATABASE: nextcloud
+      MYSQL_USER: nextcloud
+      MYSQL_PASSWORD_FILE: /run/secrets/database_password
+      NEXTCLOUD_ADMIN_USER: ${NEXTCLOUD_USER:-library}
+      NEXTCLOUD_ADMIN_PASSWORD_FILE: /run/secrets/nextcloud_admin_password
+      NEXTCLOUD_TRUSTED_DOMAINS: "127.0.0.1 localhost"
+      REDIS_HOST: redis
+      PHP_MEMORY_LIMIT: 512M
+      PHP_UPLOAD_LIMIT: 32G
+      APACHE_BODY_LIMIT: "0"
+      OVERWRITECLIURL: http://127.0.0.1:${SERVER_PORT:-8787}
+      TZ: ${TZ:-UTC}
+    secrets: [database_password, nextcloud_admin_password]
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1/status.php"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 180s
+    mem_limit: 1536m
+    cpus: 2.0
+    logging:
+      driver: json-file
+      options: {max-size: "5m", max-file: "3"}
+  cron:
+    image: nextcloud@sha256:0e5688ba0988b9112cf03f9c6bab53eccb466d278435f6596f16c1f25acacf74
+    pull_policy: never
+    restart: unless-stopped
+    networks: [nextcloud-internal]
+    entrypoint: /cron.sh
+    depends_on:
+      nextcloud: {condition: service_healthy}
+    volumes:
+      - nextcloud-code:/var/www/html
+      - ${DATA_DIR:?Set DATA_DIR in .env}/nextcloud/config:/var/www/html/config
+      - ${DATA_DIR:?Set DATA_DIR in .env}/nextcloud/data:/var/www/html/data
+      - ${DATA_DIR:?Set DATA_DIR in .env}/nextcloud/custom_apps:/var/www/html/custom_apps
+      - ./config/php-local.ini:/usr/local/etc/php/conf.d/zz-baidudrive.ini:ro
+    environment:
+      TZ: ${TZ:-UTC}
+    mem_limit: 384m
+    cpus: 0.5
+    logging:
+      driver: json-file
+      options: {max-size: "5m", max-file: "3"}
+  nextcloud-gateway:
+    image: nextcloud@sha256:0e5688ba0988b9112cf03f9c6bab53eccb466d278435f6596f16c1f25acacf74
+    pull_policy: never
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c", "a2enmod proxy proxy_http >/dev/null && exec apache2-foreground"]
+    networks: [default, nextcloud-internal]
+    depends_on:
+      nextcloud: {condition: service_healthy}
+    ports:
+      - "127.0.0.1:${SERVER_PORT:-8787}:80"
+    volumes:
+      - ./config/nextcloud-gateway.conf:/etc/apache2/sites-enabled/000-default.conf:ro
+      - ./config/mpm_prefork.conf:/etc/apache2/mods-available/mpm_prefork.conf:ro
+    tmpfs: [/var/www/html:size=1m]
+    environment:
+      TZ: ${TZ:-UTC}
+    mem_limit: 256m
+    cpus: 0.5
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1/status.php"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options: {max-size: "5m", max-file: "3"}
+secrets:
+  database_password: {file: "${DATA_DIR:?Set DATA_DIR in .env}/secrets/database-password.txt"}
+  database_root_password: {file: "${DATA_DIR:?Set DATA_DIR in .env}/secrets/database-root-password.txt"}
+  nextcloud_admin_password: {file: "${DATA_DIR:?Set DATA_DIR in .env}/secrets/nextcloud-admin-password.txt"}
+volumes:
+  nextcloud-code:
+networks:
+  default: {}
+  nextcloud-internal:
+    internal: true
