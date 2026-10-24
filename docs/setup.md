@@ -5,7 +5,7 @@
 1. 安装 PowerShell 7.4 或更高版本。
 2. 安装 Docker Desktop。
 3. 将 Docker Desktop 切换为 Linux 容器。
-4. 从 [Nextcloud 官方站点](https://nextcloud.com/install/#install-clients)安装桌面客户端。
+4. 从[官方发行目录](https://download.nextcloud.com/desktop/releases/Windows/)安装 Nextcloud Desktop 35.0.0 x64。
 5. 暂时退出桌面客户端。
 
 ## 2. 配置目录
@@ -17,9 +17,7 @@
 5. 检查三个端口是否可用。
 
 目录使用正斜线。例如：`D:/BaiduLibraryData`。
-
 使用仓库之外的两个独立目录树，分别保存运行数据和文件库。
-
 运行目录使用支持 NTFS 权限的本机磁盘。首次初始化使用空目录。
 
 ## 3. 初始化
@@ -33,76 +31,70 @@ pwsh -File .\windows\Library.ps1 -Action StartServer
 ```
 
 预期结果：输出中的 `server_running` 为 `true`。
-
-`Init` 创建运行目录和随机凭据。再次执行时，它保留已登记实例的凭据和状态。
-
-`Prepare` 需要网络。后续日常启动使用本地镜像。
+`Init` 创建运行目录和随机凭据。再次执行时保留已登记实例的凭据和状态。
+`Prepare` 需要网络。日常启动使用本地镜像。
 
 ## 4. 配置 OpenList
 
-1. 打开 `.env` 中 `OPENLIST_PORT` 对应的本机地址。
-2. 按 [OpenList 官方说明](https://doc.oplist.org/)设置管理员账号。
+1. 打开 `OPENLIST_PORT` 对应的本机地址。
+2. 按[官方说明](https://doc.oplist.org/)设置管理员账号。
 3. 添加百度网盘存储。
 4. 按[百度驱动说明](https://doc.oplist.org/guide/drivers/baidu)完成百度授权。
 5. 将存储挂载路径设为 `/baidu`。
-6. 为文件库选择独立的百度目录。
-7. 创建名称与 `OPENLIST_USER` 相同的 WebDAV 用户。
-8. 按目标目录授予该用户所需的读写权限。
-9. 确认该用户可以访问 `/baidu`。
+6. 为文件库选择独立的百度物理目录。
+7. 将该存储的 WebDAV 策略设为本地代理。
+8. 创建名称与 `OPENLIST_USER` 相同的 WebDAV 用户。
+9. 按目标目录授予该用户所需的读写权限。
+10. 确认该用户可以访问 `OPENLIST_DAV_PATH`。
 
-将该存储的 WebDAV 策略设为本地代理。该模式由 OpenList 转发下载内容。见[上游策略说明](https://doc.oplist.org/guide/drivers/common)。
+默认 `/dav/baidu` 对应根目录用户看到的 `/baidu` 存储。
+如果用户基础目录已设为 `/baidu`，将 WebDAV 路径设为 `/dav`。
+同时将 `METADATA_DAV_PATH` 设为共享文件库在该用户下的路径。
+各设备选择相同的百度物理目录。
 
-百度大文件下载对请求头有要求。首次验收应包含一个大于 20 MiB 的文件。
+## 5. 连接共享元数据
 
-百度授权在本步骤完成。授权资料保存在仓库之外的运行目录中。
+适配器在百度目录的 `.baidulibrary` 中保存快照和操作记录。
 
-## 5. 配置 Nextcloud 外部存储
-
-1. 打开 `.env` 中 `SERVER_PORT` 对应的本机地址。
-2. 使用 `NEXTCLOUD_USER` 登录。
-3. 从运行目录的 `secrets/nextcloud-admin-password.txt` 读取初始密码。
-4. 在应用管理中启用“External storage support”。
-5. 在管理设置中打开“外部存储”。
-6. 添加 WebDAV 存储。
-7. 按下表填写字段。
-
-| 字段 | 值 |
-| --- | --- |
-| 文件夹名称 | `Baidu`；与 `CLIENT_REMOTE_PATH=/Baidu` 一致 |
-| 主机 | `empty-codec:8080` |
-| 远端路径 | `dav/baidu` |
-| 安全连接 | 关闭；此连接位于本机 Docker 网络中 |
-| 认证方式 | 用户名和密码 |
-| 用户名 | `OPENLIST_USER` |
-| 密码 | 上一步创建的 OpenList WebDAV 密码 |
-| 可用账号 | `NEXTCLOUD_USER` |
-
-8. 等待存储状态变为可用。
-9. 打开文件列表中的 `Baidu` 文件夹。
-10. 确认目标目录内容可见。
-
-容器通过 `empty-codec:8080` 访问适配器。
-
-## 6. 配对桌面客户端
-
-执行：
+如果这是第一台设备，先发布登记：
 
 ```powershell
-pwsh -File .\windows\Library.ps1 -Action Pair
+pwsh -File .\windows\Library.ps1 -Action PublishMetadata
 ```
 
-这是显式配对操作。它会打开客户端界面。
+输入专用 WebDAV 用户的密码。工具保存受 Windows 保护的本机凭据。
+首份发布由一台设备完成。
+如果已有设备发布了元数据，新设备直接执行下一步。
 
-1. 将服务器地址设为本地入口。例如：`http://127.0.0.1:8787`。
-2. 使用本地 Nextcloud 账号完成授权。
-3. 将远端目录设为 `CLIENT_REMOTE_PATH`。
-4. 将本地目录设为 `LIBRARY_DIR`。
-5. 启用虚拟文件功能。
-6. 关闭客户端自身的“登录后自动启动”选项。
+## 6. 完成文件库配置
+
+```powershell
+pwsh -File .\windows\Library.ps1 -Action ConfigureStorage
+pwsh -File .\windows\Library.ps1 -Action Build
+pwsh -File .\windows\Library.ps1 -Action Pair
+pwsh -File .\windows\Library.ps1 -Action EnableStartup
+pwsh -File .\windows\Library.ps1 -Action CreateShortcut
+```
+
+`ConfigureStorage` 校验 WebDAV 凭据，读取共享状态，并创建专用外部存储。
+已有匹配的外部存储会被保留。
+
+`Pair` 使用[上游配对接口](https://docs.nextcloud.com/server/stable/admin_manual/desktop/massdeployment.html#non-interactive-account-provisioning)配置本地账号，并启用 Windows 虚拟文件。
+配对凭据在进程启动参数中短暂出现。请在自己控制的 Windows 账号下操作。
+配对完成后，专用配置和 Windows 凭据保护机制负责保存凭据。
 
 首次配对使用新的空文件库目录。
+专用配置已有本地账号时，`Pair` 按现有配置启动。
+已有文件库的暂停状态继续生效。
 
-如果客户端已经保存了有效的本地账号，`Pair` 复用该配置启动客户端。
+前置软件、OpenList 和首份元数据准备完成后，也可执行：
+
+```powershell
+pwsh -File .\windows\Library.ps1 -Action Setup
+```
+
+`Setup` 准备镜像、配置外部存储、配对客户端、构建控制窗口并登记自启。
+控制窗口、桌面快捷方式和 Windows 自启使用同一个入口。
 
 ## 7. 验证启动
 
@@ -111,19 +103,20 @@ pwsh -File .\windows\Library.ps1 -Action Start
 pwsh -File .\windows\Library.ps1 -Action Status
 ```
 
-预期结果：`server_running`、`client_running` 和 `profile_ready` 均为 `true`。
+预期结果：`server_running`、`client_running`、`profile_ready` 和 `ready` 均为 `true`。
 
-1. 在文件库中打开一个已有的小文件。
-2. 确认内容正确。
-3. 检查客户端是否报告同步错误。
+1. 在第一台设备创建一个空文件和一个普通文件。
+2. 等待客户端完成同步。
+3. 在第二台设备执行 `RefreshMetadata`。
+4. 等待第二台设备完成目录发现。
+5. 确认空文件大小为零。
+6. 打开普通文件并确认内容。
+7. 通过不同文件上的操作验收双向同步。
 
-部署者通过上述文件读取和客户端状态检查完成实际验收。
+同一文件发生并发修改时，按客户端的冲突提示处理。
+一致性边界见[多设备元数据](multi-device.md)。
 
-## 8. 登记自启
+## 8. 配置备用下载
 
-```powershell
-pwsh -File .\windows\Library.ps1 -Action EnableStartup
-pwsh -File .\windows\Library.ps1 -Action CreateShortcut
-```
-
-启动项和快捷方式都调用相同的本地启动链路。
+默认使用 OpenList 下载。备用 PCS 下载采用独立会话凭据。
+配置方法见[备用下载](downloads.md)。

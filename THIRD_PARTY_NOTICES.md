@@ -1,6 +1,8 @@
 # 第三方组件
 
-第三方程序、镜像和安装包由部署者从上游获取。本项目自有代码和说明采用 MIT 许可证。
+第三方程序、镜像和安装包由部署者从上游获取。通用适配器、Windows 入口和说明采用 MIT 许可证。
+
+`nextcloud/baidudrive_quota` 保留提取时的 AGPL 许可证。完整条款见该目录的 `COPYING`。
 
 以下组件由部署者单独取得。其许可以上游对应版本的文件为准。
 
@@ -13,6 +15,7 @@
 | Redis | 7.4 系列；镜像按摘要固定 | [Redis 7.4 的 RSALv2 / SSPLv1 授权说明](https://redis.io/legal/licenses/) |
 | Python | 3.13；基础镜像按摘要固定 | [PSF 授权说明](https://docs.python.org/3/license.html) |
 | HTTPX | 0.28.1 | [源码与许可证](https://github.com/encode/httpx) |
+| BaiduPCS-Go | 可选，4.0.1 | [源码与许可证](https://github.com/qjfoidnh/BaiduPCS-Go/tree/v4.0.1) |
 | Apache、PHP 及镜像内依赖 | 随 Nextcloud 镜像提供 | 见对应镜像及上游源码 |
 
 `compose.yaml` 记录部署镜像的固定摘要。摘要直接引用上游发行物。

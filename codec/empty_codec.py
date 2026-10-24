@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: MIT
 """Local WebDAV adapter: logical empty files have registered, nonempty Baidu bodies.
 
-Only registered exact bodies are decoded. All credentials are forwarded to
-OpenList, never saved. SQLite and its initialization sentinel must be backed up
+Only registered exact bodies are decoded. WebDAV credentials pass to OpenList;
+optional PCS credentials stay in its isolated private state directory. SQLite
+and its initialization sentinel must be backed up
 together. An ambiguous write fails closed until a successful replacement PUT.
 """
 import base64
@@ -10,7 +11,6 @@ import contextlib
 import email.utils
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-import io
 import json
 import os
 from pathlib import Path
@@ -23,6 +23,8 @@ import urllib.parse
 import xml.etree.ElementTree as ET
 
 import httpx
+from pcs_download import PcsDownloads
+from shared_metadata import SharedMetadata, MetadataError
 
 DAV = '{DAV:}'
 MAGIC = b'BaiduDrive empty-file v1\n'
@@ -82,7 +84,7 @@ class Catalog:
             raise RuntimeError('Empty-file catalog is missing. Restore its backup before starting.')
         self.db = sqlite3.connect(db, check_same_thread=False)
         self.lock = threading.RLock()
-        self.db.executescript('''PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
+        self.db.executescript('''PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA cache_size=-65536;
           CREATE TABLE IF NOT EXISTS files(scope TEXT,path TEXT,payload BLOB,PRIMARY KEY(scope,path));
           CREATE TABLE IF NOT EXISTS writes(scope TEXT,path TEXT,kind TEXT,payload BLOB,PRIMARY KEY(scope,path));
           CREATE TABLE IF NOT EXISTS operations(id TEXT PRIMARY KEY,scope TEXT,src TEXT,dst TEXT,kind TEXT);
@@ -98,14 +100,37 @@ class Catalog:
             self.check_operations(scope, path)
             old = self.db.execute('SELECT payload FROM files WHERE scope=? AND path=?', (scope, path)).fetchone()
             pending = self.db.execute('SELECT kind,payload FROM writes WHERE scope=? AND path=?', (scope, path)).fetchone()
-            if pending and pending[0] == 'normal' and old:
-                raise CodecError(503, 'An interrupted replacement PUT must be retried.')
-            if pending and pending[0] == 'normal':
-                # Unregistered ordinary files need no marker interpretation.
-                # Preserve physical bytes/404 instead of disabling a complete
-                # mount after an ambiguous ordinary PUT response.
-                return []
-            return [x for x in (pending[1] if pending else None, old[0] if old else None) if x is not None]
+            return self.candidates(old[0] if old else None, pending)
+
+    @staticmethod
+    def candidates(old, pending):
+        if pending and pending[0] == 'normal' and old:
+            raise CodecError(503, 'An interrupted replacement PUT must be retried.')
+        if pending and pending[0] == 'normal':
+            # Preserve physical bytes/404 for unregistered ordinary files.
+            return []
+        return [x for x in (pending[1] if pending else None, old) if x is not None]
+
+    def listing_metadata(self, scope, paths):
+        """Read one directory's registry data without a transaction per item."""
+        paths = list(dict.fromkeys(paths))
+        with self.lock:
+            operations = list(self.db.execute('SELECT src,dst FROM operations WHERE scope=?', (scope,)))
+            for path in paths:
+                if any(inside(path, src) or dst and inside(path, dst) for src, dst in operations):
+                    raise CodecError(503, 'An interrupted namespace operation needs recovery.')
+            old, pending, mtimes = {}, {}, {}
+            for start in range(0, len(paths), 400):
+                chunk = paths[start:start+400]
+                where = ' WHERE scope=? AND path IN (' + ','.join('?' for _ in chunk) + ')'
+                args = [scope, *chunk]
+                old.update(self.db.execute('SELECT path,payload FROM files' + where, args))
+                pending.update((p, (kind, payload)) for p, kind, payload in
+                               self.db.execute('SELECT path,kind,payload FROM writes' + where, args))
+                mtimes.update(self.db.execute('SELECT path,mtime FROM mtimes' + where, args))
+            result = {path: (self.candidates(old.get(path), pending.get(path)), mtimes.get(path))
+                      for path in paths}
+            return self.db.total_changes, result
 
     def check_operations(self, scope, path):
         with self.lock:
@@ -231,6 +256,8 @@ class CodecServer(ThreadingHTTPServer):
         self.upstream = upstream.rstrip('/')
         self.user_scope = hashlib.sha256(user.encode()).hexdigest()
         self.catalog = Catalog(root)
+        self.pcs = PcsDownloads(root)
+        self.shared = SharedMetadata(self)
         self.namespace = NamespaceLock()
         self.path_locks = [threading.RLock() for _ in range(257)]
         self.client = httpx.Client(trust_env=False, timeout=httpx.Timeout(600, connect=15),
@@ -244,6 +271,7 @@ class CodecServer(ThreadingHTTPServer):
     def server_close(self):
         super().server_close()
         self.client.close()
+        self.pcs.close()
         self.catalog.close()
 
 
@@ -255,6 +283,9 @@ class Handler(BaseHTTPRequestHandler):
         pass  # Paths, headers and credentials must not enter container logs.
 
     def reply(self, status, content=b'', headers=None):
+        if getattr(self, '_defer_reply', False):
+            self._pending_reply = (status, content, headers)
+            return
         self.send_response(status)
         for k, v in (headers or {}).items():
             if k.lower() not in HOP | {'server', 'date'}:
@@ -286,7 +317,6 @@ class Handler(BaseHTTPRequestHandler):
                         if not trailer or not trailer.endswith(b'\r\n'):
                             raise CodecError(400, 'Invalid chunk trailer.')
                     raise CodecError(400, 'Too many chunk trailers.')
-                    return
                 while size:
                     chunk = self.rfile.read(min(size, 1024 * 1024))
                     if not chunk:
@@ -392,13 +422,11 @@ class Handler(BaseHTTPRequestHandler):
         if any(x in self.headers for x in ('If', 'If-Match', 'If-None-Match')):
             self.translate_conditions(h, path, scope)
         length = self.headers.get('Content-Length')
-        temporary = None
-        try:
-            # Receive the complete body in the state directory before forwarding. Some upstream
-            # uploaders commit a short object when a streaming sender aborts.
-            if length is not None and not 0 <= int(length) <= 32 * 1024**3:
-                raise CodecError(413, 'Upload exceeds configured size limit.')
-            temporary = tempfile.TemporaryFile(dir=self.server.temp)
+        # Receive the complete body in the state directory before forwarding. Some upstream
+        # uploaders commit a short object when a streaming sender aborts.
+        if length is not None and not 0 <= int(length) <= 32 * 1024**3:
+            raise CodecError(413, 'Upload exceeds configured size limit.')
+        with tempfile.TemporaryFile(dir=self.server.temp) as temporary:
             size = 0
             for chunk in self.body_chunks():
                 size += len(chunk)
@@ -430,9 +458,6 @@ class Handler(BaseHTTPRequestHandler):
             # Failed/ambiguous writes retain their intent. Retrying a successful
             # PUT clears it; no unregistered marker becomes a zero-byte file.
             self.reply(status, response, response_headers)
-        finally:
-            if temporary:
-                temporary.close()
 
     def propfind(self, path, scope):
         h = self.headers_upstream()
@@ -444,15 +469,34 @@ class Handler(BaseHTTPRequestHandler):
             raise CodecError(502, 'Upstream WebDAV listing exceeds metadata limit.')
         root = ET.fromstring(r.content)
         changed = False
+        if self.server.shared.enabled:
+            for response in list(root.findall(DAV + 'response')):
+                href = response.findtext(DAV + 'href')
+                if href and self.server.shared.protects(canonical(href)):
+                    root.remove(response)
+                    changed = True
+        paths = [canonical(href.text) for response in root.findall(DAV + 'response')
+                 if (href := response.find(DAV + 'href')) is not None and href.text]
+        generation, metadata = self.server.catalog.listing_metadata(scope, paths)
         for response in root.findall(DAV + 'response'):
             href = response.find(DAV + 'href')
             if href is None or not href.text:
                 continue
             p = canonical(href.text)
+            length = response.find('.//' + DAV + 'getcontentlength')
+            if length is not None and (length.text or '').isdigit():
+                self.server.pcs.hint(p, int(length.text))
             child_lock = self.server.path_locks[hash((scope, p)) % len(self.server.path_locks)]
             with child_lock:
-                candidates = self.server.catalog.entries(scope, p)
-                mtime = self.server.catalog.mtime(scope, p)
+                with self.server.catalog.lock:
+                    if self.server.catalog.db.total_changes == generation:
+                        candidates, mtime = metadata[p]
+                    else:
+                        # A concurrent PUT/PROPPATCH may have changed registry
+                        # state after the batch read. Recheck under the same
+                        # per-path lock used by those writers.
+                        candidates = self.server.catalog.entries(scope, p)
+                        mtime = self.server.catalog.mtime(scope, p)
                 if not candidates and mtime is None:
                     continue
                 payload = self.verified_empty(p, candidates)[0] if candidates else None
@@ -560,11 +604,75 @@ class Handler(BaseHTTPRequestHandler):
                 self.server.catalog.set_mtime(scope, dst, mtime)
         self.reply(r.status_code, r.content, {'ETag': self.etag(payload)})
 
+    def pcs_read(self, path, headers):
+        requested = self.headers.get('Range')
+        if self.command != 'GET' or not self.server.pcs.eligible(path, requested):
+            return False
+        started = False
+        try:
+            # Keep OpenList's account authorization and conditional validation.
+            h = {k: v for k, v in headers.items() if k.lower() not in ('range', 'if-range')}
+            head = self.server.client.head(self.server.upstream + quoted(path), headers=h)
+            if head.status_code != 200 or 'Content-Length' not in head.headers:
+                return False
+            if self.headers.get('If-Range') and self.headers['If-Range'] != head.headers.get('ETag'):
+                return False
+            with self.server.pcs.prepare(path[len(self.server.pcs.prefix)+1:], head.headers, requested) as (first, last, total, chunks):
+                initial = next(chunks)
+                self.send_response(206 if requested else 200)
+                self.send_header('Content-Type', head.headers.get('Content-Type', 'application/octet-stream'))
+                self.send_header('Content-Length', str(last-first+1))
+                self.send_header('Accept-Ranges', 'bytes')
+                if requested:
+                    self.send_header('Content-Range', f'bytes {first}-{last}/{total}')
+                if head.headers.get('ETag'):
+                    self.send_header('ETag', head.headers['ETag'])
+                mtime = self.server.catalog.mtime(scope_for(self.headers['Authorization']), path)
+                if mtime is not None:
+                    self.send_header('Last-Modified', email.utils.formatdate(mtime, usegmt=True))
+                elif head.headers.get('Last-Modified'):
+                    self.send_header('Last-Modified', head.headers['Last-Modified'])
+                self.end_headers()
+                started = True
+                self.wfile.write(initial)
+                for chunk in chunks:
+                    self.wfile.write(chunk)
+                print(json.dumps({'pcs_download_bytes': last-first+1, 'range_window': self.server.pcs.window}), flush=True)
+                return True
+        except ValueError:
+            if started:
+                self.close_connection = True
+                raise ConnectionResetError('PCS response interrupted') from None
+            return False
+        except Exception as error:
+            if started:
+                # A partial response must end early; never append an error body.
+                self.close_connection = True
+                raise ConnectionResetError('PCS response interrupted') from None
+            print(json.dumps({'pcs_download_fallback': type(error).__name__}), flush=True)
+            return False
+
     def forward(self, path):
+        self._forward_started = False
+        try:
+            return self.forward_upstream(path)
+        except httpx.HTTPError:
+            if self._forward_started:
+                self.close_connection = True
+                raise ConnectionResetError('Upstream response interrupted') from None
+            if self.pcs_read(path, self.headers_upstream()):
+                return
+            raise
+
+    def forward_upstream(self, path):
         h = self.headers_upstream()
+        if self.server.pcs.prefer and self.pcs_read(path, h):
+            return
         body = self.limited_body() if self.command not in ('GET', 'HEAD') else None
         with self.server.client.stream(self.command, self.server.upstream + quoted(path), headers=h,
                                        content=body, follow_redirects=self.command in ('GET', 'HEAD')) as r:
+            if r.status_code in (403, 408, 429, 500, 502, 503, 504) and self.pcs_read(path, h):
+                return
             self.send_response(r.status_code)
             mtime = self.server.catalog.mtime(scope_for(self.headers['Authorization']), path)
             for k, v in r.headers.items():
@@ -577,16 +685,45 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header('Connection', 'close')
                 self.close_connection = True
             self.end_headers()
+            self._forward_started = True
             if self.command != 'HEAD':
                 for chunk in r.iter_raw(chunk_size=1024 * 1024):
                     self.wfile.write(chunk)
 
+    def mutate(self, function, path, scope):
+        shared = self.server.shared
+        paths = [path]
+        if self.headers.get('Destination'):
+            paths.append(canonical(self.headers['Destination']))
+        if shared.enabled:
+            if any(not shared.in_library(p) for p in paths):
+                raise CodecError(403, 'Write inside the shared library directory.')
+            if any(shared.protects(p) or inside(shared.root, p) for p in paths):
+                raise CodecError(403, 'The shared metadata directory is managed by the adapter.')
+        identities = shared.begin(self.headers['Authorization'], paths)
+        self._defer_reply = True
+        self._pending_reply = None
+        try:
+            function(path, scope)
+        finally:
+            self._defer_reply = False
+        if self._pending_reply is None:
+            raise CodecError(502, 'Write returned no final status; shared intent retained.')
+        status, content, headers = self._pending_reply
+        if 200 <= status < 300 and not (self.command in ('MOVE', 'COPY', 'DELETE') and status == 207):
+            shared.finish(self.headers['Authorization'], identities, paths, True)
+        # An ambiguous upstream response keeps the shared intent, like the local
+        # write journal. A successful retry from this device resolves it.
+        self.reply(status, content, headers)
+
     def dispatch(self):
         self.connection.settimeout(600)
         if self.path == '/health' and self.command == 'GET':
-            return self.reply(200, b'{"service":"empty-codec","version":1,"registered_empty_files":true,"logical_mtime":true}\n', {'Content-Type': 'application/json'})
+            return self.reply(200, json.dumps({'service':'empty-codec','version':1,
+                'registered_empty_files':True,'logical_mtime':True,
+                'shared_metadata':self.server.shared.status()}).encode()+b'\n', {'Content-Type': 'application/json'})
         try:
-            path = canonical(self.path)
+            path = self.path if self.path == '/__library_metadata' and self.command == 'POST' else canonical(self.path)
             scope = scope_for(self.headers.get('Authorization'))
             if scope is None:
                 self.close_connection = True
@@ -594,13 +731,38 @@ class Handler(BaseHTTPRequestHandler):
             if scope != self.server.user_scope:
                 self.close_connection = True
                 return self.reply(403, b'Dedicated WebDAV user required.\n', {'Connection':'close'})
+            shared = self.server.shared
+            if self.path == '/__library_metadata' and self.command == 'POST':
+                self.authorize_mutation()
+                action = json.loads(self.limited_body()).get('action')
+                if action not in ('join', 'publish', 'refresh'):
+                    raise CodecError(400, 'Select join, publish or refresh.')
+                with self.server.namespace.acquire(True):
+                    result = shared.bootstrap(self.headers['Authorization'], create=action == 'publish')
+                return self.reply(200, json.dumps(result).encode(), {'Content-Type':'application/json'})
+            if shared.enabled:
+                if shared.protects(path):
+                    raise CodecError(403, 'The shared metadata directory is managed by the adapter.')
+                shared.refresh(self.headers['Authorization'])
+                shared.check([path], own_retry=self.command in ('PUT','PROPPATCH','MOVE','COPY','DELETE'))
             namespace_write = self.command in ('MOVE', 'COPY', 'DELETE')
+            guard = self.server.catalog.root / 'migration-readonly.json'
+            if self.command in ('PUT', 'PROPPATCH', 'MKCOL', 'MOVE', 'COPY', 'DELETE') and guard.exists():
+                prefixes = json.loads(guard.read_text(encoding='utf-8'))['prefixes']
+                destination = self.headers.get('Destination')
+                paths = [path] + ([canonical(destination)] if destination else [])
+                if (self.headers.get('X-BaiduDrive-Migration') != '1'
+                        and any(inside(p, prefix) or inside(prefix, p) for p in paths for prefix in prefixes)):
+                    self.authorize_mutation()
+                    print(json.dumps({'migration_write_blocked': path, 'method': self.command}), flush=True)
+                    raise CodecError(423, 'Migration protects verified cloud content; local changes are retained.')
             lock = (contextlib.nullcontext() if self.command == 'PROPFIND'
                     else self.server.path_locks[hash((scope, path)) % len(self.server.path_locks)])
             with self.server.capacity, self.server.namespace.acquire(namespace_write), lock:
                 if self.command == 'PUT':
                     self.authorize_mutation()
-                    return self.put(path, scope)
+                    self.server.pcs.invalidate(path)
+                    return self.mutate(self.put, path, scope)
                 candidates = self.server.catalog.entries(scope, path)
                 if self.command in ('GET', 'HEAD') and candidates:
                     return self.empty_read(path, candidates)
@@ -608,16 +770,23 @@ class Handler(BaseHTTPRequestHandler):
                     return self.propfind(path, scope)
                 if self.command == 'PROPPATCH':
                     self.authorize_mutation()
-                    return self.proppatch(path, scope)
+                    self.server.pcs.invalidate(path)
+                    return self.mutate(self.proppatch, path, scope)
                 if namespace_write:
                     self.authorize_mutation()
-                    return self.namespace_operation(path, scope)
+                    self.server.pcs.invalidate(path)
+                    if self.headers.get('Destination'):
+                        self.server.pcs.invalidate(canonical(self.headers['Destination']))
+                    return self.mutate(self.namespace_operation, path, scope)
                 return self.forward(path)
         except (BrokenPipeError, ConnectionResetError):
             self.close_connection = True
         except (ValueError, ET.ParseError):
             self.close_connection = True
             self.reply(400, b'Invalid WebDAV request.\n', {'Connection': 'close'})
+        except MetadataError as e:
+            self.close_connection = True
+            self.reply(503, (str(e) + '\n').encode(), {'Connection': 'close'})
         except CodecError as e:
             self.close_connection = True
             self.reply(e.status, (str(e) + '\n').encode(), {'Connection': 'close'})
@@ -628,7 +797,7 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(502, b'Upstream operation interrupted; write journal retained.\n', {'Connection': 'close'})
 
     do_GET = do_HEAD = do_PUT = do_PROPFIND = do_PROPPATCH = dispatch
-    do_MOVE = do_COPY = do_DELETE = do_MKCOL = do_OPTIONS = do_LOCK = do_UNLOCK = dispatch
+    do_MOVE = do_COPY = do_DELETE = do_MKCOL = do_OPTIONS = do_LOCK = do_UNLOCK = do_POST = dispatch
 
 
 if __name__ == '__main__':

@@ -5,6 +5,10 @@ $CONFIG = [
     'check_data_directory_permissions' => false,
     'allow_local_remote_servers' => true,
     'enable_previews' => false,
+    'apps_paths' => [
+        ['path' => '/var/www/html/apps', 'url' => '/apps', 'writable' => false],
+        ['path' => '/var/www/html/custom_apps', 'url' => '/custom_apps', 'writable' => true],
+    ],
     'default_language' => 'zh_CN',
     'tempdirectory' => '/var/www/html/data/tmp',
     'loglevel' => 2,
@@ -19,4 +23,6 @@ $CONFIG = [
     // Archive website source files as data, including .htaccess.
     // Nextcloud still controls its .part/.filepart transfer restrictions.
     'forbidden_filenames' => [],
+    'baidudrive_quota_storage_id' => 'webdav::' . (getenv('LIBRARY_WEBDAV_USER') ?: 'library-storage')
+        . '@empty-codec:8080//' . trim(getenv('LIBRARY_WEBDAV_ROOT') ?: '/dav/baidu', '/') . '/',
 ];

@@ -19,6 +19,11 @@
 | `OPENLIST_PORT` | OpenList 管理端口 | `5244` |
 | `CODEC_PORT` | 适配器诊断端口 | `5246` |
 | `TZ` | 容器时区 | `UTC` |
+| `OPENLIST_DAV_PATH` | Nextcloud 外部存储的 WebDAV 根目录 | `/dav/baidu` |
+| `METADATA_DAV_PATH` | 共享文件库在 WebDAV 中的目录 | `/dav/baidu` |
+| `SHARED_METADATA` | 共享逻辑元数据；1 为启用 | `1` |
+| `CLIENT_MAX_PARALLEL` | 客户端发现任务共享预算，1 至 64 | `24` |
+| `PCS_DOWNLOAD_MODE` | 备用下载策略 | `fallback` |
 
 三个服务分别使用独立端口。端口范围是 1024 至 65535。
 
@@ -62,7 +67,9 @@ Docker 内部网络用于限制服务器出站。[规则依据](https://docs.doc
 
 本地 Nextcloud 配置允许归档 `.htaccess` 等源文件。该配置用于本机文件库。
 
-客户端沿用安装目录中的全局排除规则。部署者按需要维护这些规则。
+`ApplyPolicy` 保留专用的 `node_modules` 目录排除规则。
+该操作允许名称以 `~` 结尾的文件和已有 `.crdownload` 文件。
+安装目录的全局规则需要对应文件的写入权限。工具按需请求 Windows 管理员确认，仅授予当前用户该文件的修改权限。
 
 适配器将逻辑修改时间保存在状态目录中。备份和恢复时，完整保留该目录。
 
@@ -73,3 +80,23 @@ Docker 内部网络用于限制服务器出站。[规则依据](https://docs.doc
 适配器先完整暂存内容，再转发上传。为适配器预留的空间，至少应等于所有并发上传文件的总大小。
 
 Nextcloud 自身的临时空间另计。部署者根据并发上传量安排磁盘容量。
+
+## 资源配置
+
+默认资源配置与当前参考部署一致：
+
+| 组件 | CPU 上限 | 内存上限 | 请求设置 |
+| --- | --- | --- | --- |
+| Nextcloud | 6 | 4 GiB | 24 个后端请求 |
+| 本地入口 | 1 | 512 MiB | event 模型，64 个请求 |
+| 适配器 | 4 | 1 GiB | 24 个数据请求 |
+| MariaDB | 2 | 1.5 GiB | 512 MiB 缓冲池 |
+
+这些值是上限。小型设备可在 `compose.yaml` 中降低配置。
+
+`STARTUP_NAME` 可指定现有 HKCU 启动项名称。
+省略时使用 `BaiduDriveLocal-<项目名>`。
+
+旧 `.env` 可继续使用。新增字段采用默认值。
+自定义 WebDAV 根目录时，同时检查共享目录。
+Windows 客户端继续采用 `NORMAL` SQLite 锁模式，供本机只读诊断使用。

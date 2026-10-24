@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<info>
+    <id>baidudrive_quota</id>
+    <name>BaiduDrive quota cache</name>
+    <summary>Cache the dedicated Baidu account's shared free space</summary>
+    <description>Cache free-space reporting for 60 seconds on the dedicated local Baidu WebDAV mount. File metadata and contents are unchanged.</description>
+    <version>1.0.0</version>
+    <licence>agpl</licence>
+    <author>Local</author>
+    <namespace>BaiduDriveQuota</namespace>
+    <category>files</category>
+    <dependencies><nextcloud min-version="34" max-version="35"/></dependencies>
+</info>

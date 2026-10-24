@@ -103,3 +103,16 @@ pwsh -File .\windows\Library.ps1 -Action SaveCredential
 6. 通过验证后，再切换生产实例。
 
 修改上游镜像时，更新 `compose.yaml` 中的固定摘要。`Prepare` 按配置中的固定摘要准备镜像。
+
+## 同步已安装代码
+
+```powershell
+pwsh -File .\windows\Install-Code.ps1 -Destination D:\BaiduLibraryData\tool -Check
+pwsh -File .\windows\Install-Code.ps1 -Destination D:\BaiduLibraryData\tool
+```
+
+`-Check` 列出源代码差异。
+安装操作在目标目录备份将被替换的源代码，再复制通用文件。
+目标目录的 `.env`、凭据、客户端配置和数据库继续由该实例维护。
+完成复制后，在目标目录执行 `Build`，准备适配器镜像，再执行 `Start`。
+启动时会同步本地服务器配置和容量缓存扩展。
