@@ -10,11 +10,11 @@ pwsh -File .\windows\Library.ps1 -Action Start
 
 启动顺序：Docker Desktop、本地服务、本地账号校验、专用客户端。
 
-如果账号、目录或端口不符合配置，启动立即停止。工具不会自动打开登录网页。
+账号、目录和端口通过校验后，工具启动专用客户端。校验发现差异时，启动停止并记录原因。
 
 如果客户端已经运行，工具复用该进程。
 
-工具保留客户端已有的暂停状态。`Start` 不等同于强制恢复所有同步任务。
+工具保留客户端已有的暂停状态。同步任务由客户端管理。
 
 ## 查看状态
 
@@ -22,9 +22,7 @@ pwsh -File .\windows\Library.ps1 -Action Start
 pwsh -File .\windows\Library.ps1 -Action Status
 ```
 
-`profile_ready` 只表示专用配置符合要求。它不能证明所有文件均已上传。
-
-请在客户端中确认传输队列和同步错误。
+`profile_ready` 表示专用配置通过校验。文件上传进度和同步结果以客户端的传输队列、活动记录为准。
 
 ## 停止
 
@@ -32,9 +30,9 @@ pwsh -File .\windows\Library.ps1 -Action Status
 pwsh -File .\windows\Library.ps1 -Action Stop
 ```
 
-工具先请求客户端退出，再停止本项目容器。客户端没有退出时，工具保留服务。
+工具先请求客户端退出，再停止本项目容器。工具在等待客户端退出期间保留服务。
 
-停止不会删除百度文件、运行目录或 Docker 数据卷。
+停止后，百度文件、运行目录和 Docker 数据卷保持原样。
 
 ## 管理自启
 
@@ -43,7 +41,7 @@ pwsh -File .\windows\Library.ps1 -Action EnableStartup
 pwsh -File .\windows\Library.ps1 -Action DisableStartup
 ```
 
-启动项按项目名区分。工具不删除其他项目的启动项。
+工具按项目名管理对应的启动项。其他项目的启动项保持原样。
 
 如果移动仓库目录，重新登记自启和快捷方式。
 
@@ -55,9 +53,9 @@ pwsh -File .\windows\Library.ps1 -Action DisableStartup
 pwsh -File .\windows\Library.ps1 -Action SaveCredential
 ```
 
-输入本地密码或本地应用密码。不要输入百度密码。
+输入本地 Nextcloud 密码或应用密码。
 
-凭据使用 Windows DPAPI 保存。复制到其他 Windows 账号或电脑后，凭据可能无法解密。请在目标账号下重新保存凭据。
+凭据使用 Windows DPAPI 保存，并绑定保存它的 Windows 账号和电脑。更换账号或电脑后，在目标账号下重新保存凭据。
 
 本地凭据与客户端保存的授权分开。客户端授权失效时，先在客户端中修复本地账号授权。
 
@@ -68,7 +66,7 @@ pwsh -File .\windows\Library.ps1 -Action SaveCredential
 3. 确认存储可以列出文件。
 4. 再启动文件库。
 
-工具不会在开机时跳转到百度授权页面。
+开机启动复用 OpenList 中保存的百度授权。
 
 ## 备份
 
@@ -80,7 +78,7 @@ pwsh -File .\windows\Library.ps1 -Action SaveCredential
 
 运行目录包含凭据。备份必须使用访问控制或加密保护。
 
-不要在容器运行时只复制数据库文件。不要单独备份适配器的 SQLite 文件。
+服务停止后，将数据库、适配器状态和其他运行资料作为同一备份整体保存。
 
 ## 恢复
 
@@ -93,7 +91,7 @@ pwsh -File .\windows\Library.ps1 -Action SaveCredential
 
 如果更换 Windows 账号或电脑，重新保存本地凭据并检查客户端配对。
 
-不要使用 `docker compose down -v` 处理故障。该命令会删除本项目的代码卷。
+日常故障处理使用 `Stop` 保留数据卷。`docker compose down -v` 用于明确需要删除代码卷的清理操作。
 
 ## 升级
 
@@ -104,4 +102,4 @@ pwsh -File .\windows\Library.ps1 -Action SaveCredential
 5. 验证虚拟文件下载。
 6. 通过验证后，再切换生产实例。
 
-修改上游镜像时，更新 `compose.yaml` 中的固定摘要。`Prepare` 使用配置中的镜像，它不会自行选择最新版本。
+修改上游镜像时，更新 `compose.yaml` 中的固定摘要。`Prepare` 按配置中的固定摘要准备镜像。

@@ -8,8 +8,6 @@
 4. 从 [Nextcloud 官方站点](https://nextcloud.com/install/#install-clients)安装桌面客户端。
 5. 暂时退出桌面客户端。
 
-本项目不分发或自动安装第三方客户端。
-
 ## 2. 配置目录
 
 1. 将 `.env.example` 复制为 `.env`。
@@ -20,9 +18,9 @@
 
 目录使用正斜线。例如：`D:/BaiduLibraryData`。
 
-运行目录与文件库必须位于仓库之外。它们不能互相包含。
+使用仓库之外的两个独立目录树，分别保存运行数据和文件库。
 
-运行目录必须使用支持 NTFS 权限的本机磁盘。初始化只允许空目录。
+运行目录使用支持 NTFS 权限的本机磁盘。首次初始化使用空目录。
 
 ## 3. 初始化
 
@@ -36,9 +34,9 @@ pwsh -File .\windows\Library.ps1 -Action StartServer
 
 预期结果：输出中的 `server_running` 为 `true`。
 
-`Init` 创建运行目录和随机凭据。再次执行时，它不会重置已登记的实例。
+`Init` 创建运行目录和随机凭据。再次执行时，它保留已登记实例的凭据和状态。
 
-`Prepare` 需要网络。后续日常启动只使用本地镜像。
+`Prepare` 需要网络。后续日常启动使用本地镜像。
 
 ## 4. 配置 OpenList
 
@@ -49,14 +47,14 @@ pwsh -File .\windows\Library.ps1 -Action StartServer
 5. 将存储挂载路径设为 `/baidu`。
 6. 为文件库选择独立的百度目录。
 7. 创建名称与 `OPENLIST_USER` 相同的 WebDAV 用户。
-8. 只授予该用户目标目录所需的读写权限。
+8. 按目标目录授予该用户所需的读写权限。
 9. 确认该用户可以访问 `/baidu`。
 
 将该存储的 WebDAV 策略设为本地代理。该模式由 OpenList 转发下载内容。见[上游策略说明](https://doc.oplist.org/guide/drivers/common)。
 
-百度大文件下载对请求头有要求。首次验收应包含一个大于 20 MiB 的文件。不要只检查小文件。
+百度大文件下载对请求头有要求。首次验收应包含一个大于 20 MiB 的文件。
 
-授权仅在此步骤执行。不要把令牌或密码写入仓库。
+百度授权在本步骤完成。授权资料保存在仓库之外的运行目录中。
 
 ## 5. 配置 Nextcloud 外部存储
 
@@ -73,7 +71,7 @@ pwsh -File .\windows\Library.ps1 -Action StartServer
 | 文件夹名称 | `Baidu`；与 `CLIENT_REMOTE_PATH=/Baidu` 一致 |
 | 主机 | `empty-codec:8080` |
 | 远端路径 | `dav/baidu` |
-| 安全连接 | 关闭；此连接只位于本机 Docker 网络中 |
+| 安全连接 | 关闭；此连接位于本机 Docker 网络中 |
 | 认证方式 | 用户名和密码 |
 | 用户名 | `OPENLIST_USER` |
 | 密码 | 上一步创建的 OpenList WebDAV 密码 |
@@ -83,7 +81,7 @@ pwsh -File .\windows\Library.ps1 -Action StartServer
 9. 打开文件列表中的 `Baidu` 文件夹。
 10. 确认目标目录内容可见。
 
-适配器地址必须使用 `empty-codec` 服务名。不要在容器内使用 Windows 的 `127.0.0.1`。
+容器通过 `empty-codec:8080` 访问适配器。
 
 ## 6. 配对桌面客户端
 
@@ -102,9 +100,9 @@ pwsh -File .\windows\Library.ps1 -Action Pair
 5. 启用虚拟文件功能。
 6. 关闭客户端自身的“登录后自动启动”选项。
 
-首次配对必须使用空文件库目录。工具不会自动合并旧目录。
+首次配对使用新的空文件库目录。
 
-如果客户端已经保存了本地账号，`Pair` 不会清除该账号。
+如果客户端已经保存了有效的本地账号，`Pair` 复用该配置启动客户端。
 
 ## 7. 验证启动
 
@@ -119,7 +117,7 @@ pwsh -File .\windows\Library.ps1 -Action Status
 2. 确认内容正确。
 3. 检查客户端是否报告同步错误。
 
-这一步需要部署者自行验收。静态检查不能替代此步骤。
+部署者通过上述文件读取和客户端状态检查完成实际验收。
 
 ## 8. 登记自启
 
@@ -128,4 +126,4 @@ pwsh -File .\windows\Library.ps1 -Action EnableStartup
 pwsh -File .\windows\Library.ps1 -Action CreateShortcut
 ```
 
-启动项和快捷方式都调用相同的本地链路。它们不会调用配对操作。
+启动项和快捷方式都调用相同的本地启动链路。
