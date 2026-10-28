@@ -6,10 +6,10 @@ $ErrorActionPreference='Stop'
 $source=[IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 $Destination=[IO.Path]::GetFullPath($Destination).TrimEnd('\')
 if($Destination -eq $source -or $Destination.StartsWith($source+'\',[StringComparison]::OrdinalIgnoreCase) -or $source.StartsWith($Destination+'\',[StringComparison]::OrdinalIgnoreCase) -or $Destination -eq [IO.Path]::GetPathRoot($Destination).TrimEnd('\')){throw '安装目录与仓库使用独立目录树。'}
-$relativeFiles=@('.env.example','.gitattributes','.gitignore','LICENSE','README.md','CONTRIBUTING.md','SECURITY.md','THIRD_PARTY_NOTICES.md','compose.yaml')
+$relativeFiles=@('.env.example','.gitattributes','.gitignore','LICENSE','README.md','CONTRIBUTING.md','SECURITY.md','THIRD_PARTY_NOTICES.md','compose.yaml','nextcloud\desktop\release.json')
 foreach($directory in @('codec','config','windows','docs','nextcloud')){
     $relativeFiles+=Get-ChildItem -LiteralPath (Join-Path $source $directory) -Recurse -File |
-        Where-Object { $_.Extension -in @('.py','.ps1','.cs','.yaml','.php','.conf','.ini','.md','.txt','.xml') -or $_.Name -in @('Dockerfile','.dockerignore','COPYING') } |
+        Where-Object { $_.Extension -in @('.py','.ps1','.cs','.yaml','.php','.conf','.ini','.md','.txt','.xml','.patch') -or $_.Name -in @('Dockerfile','.dockerignore','COPYING') } |
         ForEach-Object { [IO.Path]::GetRelativePath($source,$_.FullName) }
 }
 $changed=@()

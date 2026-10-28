@@ -8,6 +8,9 @@
 4. 从[官方发行目录](https://download.nextcloud.com/desktop/releases/Windows/)安装 Nextcloud Desktop 35.0.0 x64。
 5. 暂时退出桌面客户端。
 
+官方安装包提供运行库和 Windows 系统集成。
+初始化后，工具安装本项目的固定客户端覆盖包。
+
 ## 2. 配置目录
 
 1. 将 `.env.example` 复制为 `.env`。
@@ -26,12 +29,16 @@
 
 ```powershell
 pwsh -File .\windows\Library.ps1 -Action Init
+pwsh -File .\windows\Library.ps1 -Action PrepareClient
 pwsh -File .\windows\Library.ps1 -Action Prepare
 pwsh -File .\windows\Library.ps1 -Action StartServer
 ```
 
 预期结果：输出中的 `server_running` 为 `true`。
 `Init` 创建运行目录和随机凭据。再次执行时保留已登记实例的凭据和状态。
+`PrepareClient` 下载固定覆盖包，同时更新主程序、核心库和虚拟文件插件。
+Windows 管理员确认只用于覆盖程序文件。客户端以当前普通用户权限启动。
+安装过程在运行目录中备份原程序文件。
 `Prepare` 需要网络。日常启动使用本地镜像。
 
 ## 4. 配置 OpenList
@@ -93,7 +100,8 @@ pwsh -File .\windows\Library.ps1 -Action CreateShortcut
 pwsh -File .\windows\Library.ps1 -Action Setup
 ```
 
-`Setup` 准备镜像、配置外部存储、配对客户端、构建控制窗口并登记自启。
+`Setup` 准备镜像和补丁客户端、配置外部存储、完成配对，并登记自启。
+单独执行 `Pair` 时，也会检查并准备同一客户端版本。
 控制窗口、桌面快捷方式和 Windows 自启使用同一个入口。
 
 ## 7. 验证启动
@@ -103,7 +111,7 @@ pwsh -File .\windows\Library.ps1 -Action Start
 pwsh -File .\windows\Library.ps1 -Action Status
 ```
 
-预期结果：`server_running`、`client_running`、`profile_ready`、`file_accessible` 和 `ready` 均为 `true`。
+预期结果：`client_prepared`、`server_running`、`client_running`、`profile_ready`、`file_accessible` 和 `ready` 均为 `true`。
 
 1. 在第一台设备创建一个空文件和一个普通文件。
 2. 等待客户端完成同步。
@@ -115,6 +123,9 @@ pwsh -File .\windows\Library.ps1 -Action Status
 
 同一文件发生并发修改时，按客户端的冲突提示处理。
 一致性边界见[多设备元数据](multi-device.md)。
+
+补丁客户端让忽略项保持静默，并使用单一来源显示创建活动。
+客户端发布包和源码见[客户端补丁](client.md)。
 
 ## 8. 配置备用下载
 

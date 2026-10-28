@@ -1,0 +1,107 @@
+diff --git a/src/gui/activity/activitylistmodel.cpp b/src/gui/activity/activitylistmodel.cpp
+index 8a32851..075e6ea 100644
+--- a/src/gui/activity/activitylistmodel.cpp
++++ b/src/gui/activity/activitylistmodel.cpp
+@@ -607,14 +607,22 @@ void ActivityListModel::ingestActivities(const QJsonArray &activities)
+         const auto json = activity.toObject();
+ 
+         auto a = Activity::fromActivityJson(json, _accountState->account());
++        _currentItem = a._id;
+ 
+         if(_presentedActivities.contains(a._id)) {
++            // Server-side activity groups can change without receiving a new ID.
++            for (auto row = 0; row < _finalList.size(); ++row) {
++                if (_finalList[row]._type == Activity::ActivityType && _finalList[row]._id == a._id) {
++                    _finalList[row] = a;
++                    Q_EMIT dataChanged(index(row), index(row));
++                    break;
++                }
++            }
+             continue;
+         }
+ 
+         list.append(a);
+         _presentedActivities.insert(a._id);
+-        _currentItem = list.last()._id;
+ 
+         if (_presentedActivities.count() >= _maxActivities
+             || (_hideOldActivities && a._dateTime < oldestDate)) {
+@@ -628,6 +636,8 @@ void ActivityListModel::ingestActivities(const QJsonArray &activities)
+         addEntriesToActivityList(list);
+         appendMoreActivitiesAvailableEntry();
+         _activityLists.append(list);
++    } else {
++        refreshPreviewData();
+     }
+ }
+ 
+diff --git a/src/gui/tray/usermodel.cpp b/src/gui/tray/usermodel.cpp
+index 522db8d..66075af 100644
+--- a/src/gui/tray/usermodel.cpp
++++ b/src/gui/tray/usermodel.cpp
+@@ -214,7 +214,6 @@ SyncIssueKind syncIssueKindForSyncFileItem(const OCC::SyncFileItem::Status statu
+         break;
+     case OCC::SyncFileItem::SoftError:
+     case OCC::SyncFileItem::Conflict:
+-    case OCC::SyncFileItem::FileIgnored:
+     case OCC::SyncFileItem::Restoration:
+     case OCC::SyncFileItem::FileLocked:
+     case OCC::SyncFileItem::FileNameInvalid:
+@@ -224,6 +223,7 @@ SyncIssueKind syncIssueKindForSyncFileItem(const OCC::SyncFileItem::Status statu
+         break;
+     case OCC::SyncFileItem::NoStatus:
+     case OCC::SyncFileItem::Success:
++    case OCC::SyncFileItem::FileIgnored:
+         result = SyncIssueKind::None;
+         break;
+     }
+@@ -1400,6 +1400,11 @@ void User::processCompletedSyncItem(const Folder *folder, const SyncFileItemPtr
+     activity._fileAction = fileActionFromInstruction(item->_instruction);
+ 
+     if (item->_status == SyncFileItem::NoStatus || item->_status == SyncFileItem::Success) {
++        // Use the server's creation activity when the Activity app is available.
++        if (item->_instruction == CSYNC_INSTRUCTION_NEW && account()->capabilities().hasActivities()) {
++            return;
++        }
++
+         qCDebug(lcActivity) << "Item " << item->_file << " retrieved successfully.";
+ 
+         if (item->_direction != SyncFileItem::Up) {
+@@ -1462,11 +1467,6 @@ void User::processCompletedSyncItem(const Folder *folder, const SyncFileItemPtr
+                 activity._links = {buttonActivityLink};
+             }
+             _activityModel->addErrorToActivityList(activity, ActivityListModel::ErrorType::SyncError);
+-        } else if (!item->_errorString.isEmpty()) {
+-            // The item was ignored for a concrete reason (e.g. it lives in a read-only
+-            // folder and cannot be uploaded). Surface it passively in the Not-synced list
+-            // so the user can see why it did not sync.
+-            _activityModel->addErrorToActivityList(activity, ActivityListModel::ErrorType::SyncError);
+         }
+     }
+ }
+diff --git a/src/libsync/progressdispatcher.cpp b/src/libsync/progressdispatcher.cpp
+index 5964226..22c83f2 100644
+--- a/src/libsync/progressdispatcher.cpp
++++ b/src/libsync/progressdispatcher.cpp
+@@ -98,7 +98,7 @@ QString Progress::asActionString(const SyncFileItem &item)
+ bool Progress::isWarningKind(SyncFileItem::Status kind)
+ {
+     return kind == SyncFileItem::SoftError || kind == SyncFileItem::NormalError
+-        || kind == SyncFileItem::FatalError || kind == SyncFileItem::FileIgnored
++        || kind == SyncFileItem::FatalError
+         || kind == SyncFileItem::Conflict || kind == SyncFileItem::Restoration
+         || kind == SyncFileItem::DetailError || kind == SyncFileItem::BlacklistedError
+         || kind == SyncFileItem::FileLocked || kind == SyncFileItem::FileNameInvalid
+diff --git a/src/libsync/syncresult.cpp b/src/libsync/syncresult.cpp
+index c73343b..63c84c2 100644
+--- a/src/libsync/syncresult.cpp
++++ b/src/libsync/syncresult.cpp
+@@ -175,7 +175,7 @@ void SyncResult::processCompletedItem(const SyncFileItemPtr &item)
+                 // nothing.
+                 break;
+             }
+-        } else if (item->_instruction == CSYNC_INSTRUCTION_IGNORE) {
++        } else if (item->_instruction == CSYNC_INSTRUCTION_IGNORE && item->_status != SyncFileItem::FileIgnored) {
+             _foundFilesNotSynced = true;
+         }
+     }

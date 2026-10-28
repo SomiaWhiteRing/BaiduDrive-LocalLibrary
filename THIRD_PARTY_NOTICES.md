@@ -4,6 +4,11 @@
 
 `nextcloud/baidudrive_quota` 保留提取时的 AGPL 许可证。完整条款见该目录的 `COPYING`。
 
+`nextcloud/desktop/sync-display.patch` 修改 Nextcloud Desktop v35.0.0 的源码。
+补丁保留上游源码的 `GPL-2.0-or-later` 许可证。
+上游提交为 `ce977e31810bc9f2cdffc4828cc0a14bd0792110`。
+完整条款见 `nextcloud/desktop/COPYING`。
+
 以下组件由部署者单独取得。其许可以上游对应版本的文件为准。
 
 | 组件 | 参考版本 | 上游授权与源码 |

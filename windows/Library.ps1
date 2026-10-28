@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 [CmdletBinding()]
 param(
-    [ValidateSet('Init','Prepare','StartServer','Pair','Start','Stop','Status','SaveCredential','EnableStartup','DisableStartup','CreateShortcut','ConfigureStorage','Setup','StartClient','ApplyPolicy','PrepareDownloads','Build','PublishMetadata','RefreshMetadata','StopClient')]
+    [ValidateSet('Init','Prepare','PrepareClient','StartServer','Pair','Start','Stop','Status','SaveCredential','EnableStartup','DisableStartup','CreateShortcut','ConfigureStorage','Setup','StartClient','ApplyPolicy','PrepareDownloads','Build','PublishMetadata','RefreshMetadata','StopClient')]
     [string]$Action = 'Status',
     [string]$EnvFile = (Join-Path $PSScriptRoot '..\.env')
 )
@@ -209,6 +209,8 @@ function Retire-EmptyDefaultClient {
 }
 function Start-Client {
     if (-not (Test-Path -LiteralPath $Client)) { throw '未找到客户端。请修改 NEXTCLOUD_CLIENT。' }
+    $clientState=& (Join-Path $PSScriptRoot 'Prepare-Client.ps1') -ClientPath $Client -CacheDirectory (Join-Path $DataRoot 'tools\client') -Check
+    if(-not $clientState.prepared){throw '客户端尚未准备本项目的固定版本。先退出客户端，再执行 PrepareClient。'}
     Assert-LocalProfile
     if($Settings.SHARED_METADATA -eq '1' -and (Test-Path -LiteralPath (Join-Path $DataRoot 'secrets\webdav.xml'))){Invoke-Metadata 'join'}
     Assert-LocalAccess
@@ -270,6 +272,7 @@ function Invoke-Metadata([string]$MetadataAction,[pscredential]$Credential) {
 }
 function Connect-Client {
     if (-not (Test-Path -LiteralPath $Client)) { throw '先安装 Nextcloud 桌面客户端，再检查 NEXTCLOUD_CLIENT。' }
+    $null=& (Join-Path $PSScriptRoot 'Prepare-Client.ps1') -ClientPath $Client -CacheDirectory (Join-Path $DataRoot 'tools\client')
     $profile=Read-Ini (Join-Path $ClientConfig 'nextcloud.cfg')
     if ($profile.ContainsKey('Accounts') -and @($profile.Accounts.Keys | Where-Object { $_ -ne 'version' }).Count) { Start-Client; return }
     Assert-LocalAccess
@@ -326,11 +329,12 @@ function Get-Status {
     $profileReady=$false
     $metadataReady=$false
     $fileAccessible=$false
+    $clientState=& (Join-Path $PSScriptRoot 'Prepare-Client.ps1') -ClientPath $Client -CacheDirectory (Join-Path $DataRoot 'tools\client') -Check
     try{$health=Invoke-RestMethod ('http://127.0.0.1:'+$Settings.CODEC_PORT+'/health') -TimeoutSec 3;$metadataReady=($health.service -eq 'empty-codec' -and ($Settings.SHARED_METADATA -eq '0' -or $health.shared_metadata.ready))}catch{}
     try { $status=Invoke-RestMethod ($BaseUrl+'/status.php') -TimeoutSec 3; $server=$status.installed -and -not $status.maintenance } catch {}
     try { Assert-LocalProfile; $profileReady=$true } catch {}
     if($server -and $profileReady){try{Assert-LocalAccess -TimeoutSec 3;$fileAccessible=$true}catch{}}
-    [ordered]@{project=$Project;initialized=(Test-Path -LiteralPath $Marker);server_running=[bool]$server;client_running=(@(Get-ManagedClients).Count -gt 0);profile_ready=$profileReady;metadata_ready=[bool]$metadataReady;file_accessible=$fileAccessible;server_url=$BaseUrl;library=$Library;data_root=$DataRoot;startup_enabled=($null -ne (Get-ItemProperty -LiteralPath $RunKey -Name $RunName -ErrorAction SilentlyContinue));ready=($server -and $profileReady -and $metadataReady -and $fileAccessible -and (@(Get-ManagedClients).Count -gt 0));openlist_url=('http://127.0.0.1:'+$Settings.OPENLIST_PORT);log_directory=(Join-Path $DataRoot 'logs');startup_log=(Join-Path $DataRoot 'logs\startup.log')}
+    [ordered]@{project=$Project;initialized=(Test-Path -LiteralPath $Marker);server_running=[bool]$server;client_running=(@(Get-ManagedClients).Count -gt 0);client_prepared=$clientState.prepared;profile_ready=$profileReady;metadata_ready=[bool]$metadataReady;file_accessible=$fileAccessible;server_url=$BaseUrl;library=$Library;data_root=$DataRoot;startup_enabled=($null -ne (Get-ItemProperty -LiteralPath $RunKey -Name $RunName -ErrorAction SilentlyContinue));ready=($clientState.prepared -and $server -and $profileReady -and $metadataReady -and $fileAccessible -and (@(Get-ManagedClients).Count -gt 0));openlist_url=('http://127.0.0.1:'+$Settings.OPENLIST_PORT);log_directory=(Join-Path $DataRoot 'logs');startup_log=(Join-Path $DataRoot 'logs\startup.log')}
 }
 try {
     switch ($Action) {
@@ -354,6 +358,7 @@ try {
         'StartClient' { Assert-Instance; Start-Client }
         'StopClient' { Assert-Instance; Stop-Client }
         'ApplyPolicy' { Set-SyncPolicy }
+        'PrepareClient' { Assert-Instance; $null=& (Join-Path $PSScriptRoot 'Prepare-Client.ps1') -ClientPath $Client -CacheDirectory (Join-Path $DataRoot 'tools\client') }
         'PrepareDownloads' { Prepare-Downloads }
         'Build' { & (Join-Path $PSScriptRoot 'Build.ps1') }
         'Init' { Initialize-Instance }

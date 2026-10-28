@@ -33,6 +33,7 @@ Nextcloud 和后台任务连接 Docker 内部网络。适配器通过 OpenList �
 - 初始化生成独立凭据。运行目录位于仓库之外。
 - 各设备独立运行服务端，并通过百度目录共享空文件登记和逻辑修改时间。
 - 提供控制窗口、自动本地配对和可选 PCS 备用下载。
+- 新设备使用固定的补丁版客户端，统一忽略项和创建活动的显示行为。
 
 ## 开始使用
 
@@ -45,11 +46,15 @@ Nextcloud 和后台任务连接 Docker 内部网络。适配器通过 OpenList �
 
 ```powershell
 pwsh -File .\windows\Library.ps1 -Action Init
+pwsh -File .\windows\Library.ps1 -Action PrepareClient
 pwsh -File .\windows\Library.ps1 -Action Prepare
 pwsh -File .\windows\Library.ps1 -Action StartServer
 ```
 
-`Prepare` 是显式联网步骤。它下载固定镜像，并构建适配器。
+`PrepareClient` 下载并安装固定的客户端覆盖包。
+写入系统安装目录时，Windows 请求管理员确认。
+`Prepare` 下载固定镜像，并构建适配器。
+这两项操作都是显式联网步骤。
 
 接着按[部署步骤](docs/setup.md)配置 OpenList、外部存储和客户端。首次配对由脚本配置本地账号。新设备读取已发布的共享元数据。日常启动复用已保存的账号。
 
@@ -65,6 +70,7 @@ pwsh -File .\windows\Library.ps1 -Action EnableStartup
 | [部署步骤](docs/setup.md) | 初始化、授权、外部存储和首次配对 |
 | [日常操作](docs/operations.md) | 启动、停止、自启、备份和升级 |
 | [配置说明](docs/configuration.md) | 配置字段、网络和静默设置 |
+| [客户端补丁](docs/client.md) | 忽略项警告、创建活动和客户端源码准备 |
 | [架构边界](docs/architecture.md) | 组件职责、状态和数据路径 |
 | [多设备元数据](docs/multi-device.md) | 元数据共享、首次发布和恢复 |
 | [备用下载](docs/downloads.md) | PCS 程序、授权和下载策略 |
@@ -86,6 +92,6 @@ pwsh -File .\windows\Library.ps1 -Action EnableStartup
 
 ## 许可证
 
-适配器、Windows 入口和中文说明采用 [MIT](LICENSE) 许可证。Nextcloud 容量扩展保留 AGPL 许可证。第三方组件遵守各自许可证。见[第三方说明](THIRD_PARTY_NOTICES.md)。
+适配器、Windows 入口和中文说明采用 [MIT](LICENSE) 许可证。Nextcloud 容量扩展保留 AGPL 许可证。客户端补丁保留 GPL 许可证。第三方组件遵守各自许可证。见[第三方说明](THIRD_PARTY_NOTICES.md)。
 
 中文说明采用项目自定义的受控写法，规则见[中文写作规则](docs/writing-guide.md)。

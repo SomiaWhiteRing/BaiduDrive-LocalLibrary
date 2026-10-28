@@ -95,6 +95,11 @@ pwsh -File .\windows\Library.ps1 -Action SaveCredential
 
 ## 升级
 
+客户端版本由 `nextcloud/desktop/release.json` 固定。
+更新仓库后，先退出客户端，再执行 `PrepareClient`。
+该操作安装固定覆盖包，日常 `Start` 继续复用本机文件。
+客户端覆盖包的备份位于 `DATA_DIR/tools/client`。
+
 1. 完成备份。
 2. 在独立运行目录中准备新版本。
 3. 执行显式的 `Prepare`。
